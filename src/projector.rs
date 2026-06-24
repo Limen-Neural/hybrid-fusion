@@ -23,7 +23,10 @@ fn mean_pool(embedding: &Tensor) -> Vec<f32> {
             }
             pooled
         }
-        _ => embedding.data().to_vec(),
+        _ => {
+            // Treat higher-rank tensors as flat — no silent semantic change.
+            embedding.data().to_vec()
+        }
     }
 }
 

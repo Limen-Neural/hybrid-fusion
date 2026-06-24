@@ -42,6 +42,13 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         }
 
         let hidden = self.transformer.hidden_states(token_ids);
+        if hidden.ndim() == 2 && hidden.shape()[1] != self.transformer.dim() {
+            return Err(HybridError::InvalidConfig(format!(
+                "hidden state dim={} does not match transformer.dim()={}",
+                hidden.shape()[1],
+                self.transformer.dim(),
+            )));
+        }
         let embedding = pool_embedding(&hidden, self.transformer.dim());
         let snn_width = self.snn.num_channels();
         let stimuli = projector::embed_to_stimuli_with_width(&hidden, snn_width);

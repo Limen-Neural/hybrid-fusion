@@ -33,14 +33,16 @@ fed into the SNN are always bounded.
 ## Scope / Boundaries
 
 This crate **owns**:
+
 - Orchestration of hybrid ANN -> SNN forward-pass paths.
 - Transformer hidden-state pooling and resizing into bounded SNN stimuli.
 - The public `HybridNetwork<T, S>` API and error boundaries.
 
 This crate **does not own**:
-- Tensor/transformer/MoE math -> see [`cortex-tensor`](https://github.com/Limen-Neural/cortex-tensor).
-- GGUF parsing and weight layout -> see [`engram-parser`](https://github.com/Limen-Neural/engram-parser).
-- Neuron dynamics and SNN integration internals -> see [`neuromod`](https://github.com/Limen-Neural/neuromod).
+
+- Tensor/transformer/MoE math -> see [`cortex-tensor`](https://github.com/Spikenaut/cortex-tensor).
+- GGUF parsing and weight layout -> see [`engram-parser`](https://github.com/Spikenaut/engram-parser).
+- Neuron dynamics and SNN integration internals -> see [`neuromod`](https://github.com/Spikenaut/neuromod).
 
 See [LIM-9](https://github.com/Limen-Neural/hybrid-fusion/issues/5) for the
 full boundary matrix.

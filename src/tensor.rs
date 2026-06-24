@@ -10,6 +10,13 @@ pub struct Tensor {
 
 impl Tensor {
     pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Self {
+        let expected: usize = shape.iter().product();
+        assert_eq!(
+            data.len(),
+            expected,
+            "Tensor::from_vec: data.len()={} does not match shape product={expected} (shape={shape:?})",
+            data.len(),
+        );
         Self {
             data,
             shape: shape.to_vec(),
