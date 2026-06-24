@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Updated README with scope/boundary documentation and dual-license badge.
 
 ### Added
+
 - `src/tensor.rs` — lightweight owned tensor type (data + shape).
 - `src/traits.rs` — trait abstractions: `Transformer`, `SpikingNetwork`, `GgufLoader`, `NeuroModulators`.
 - `LICENSE-MIT` and `LICENSE-APACHE` files.
