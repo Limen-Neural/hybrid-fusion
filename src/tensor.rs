@@ -17,6 +17,10 @@ impl Tensor {
             "Tensor::from_vec: data.len()={} does not match shape product={expected} (shape={shape:?})",
             data.len(),
         );
+        assert!(
+            shape.iter().all(|&d| d > 0),
+            "Tensor::from_vec: shape dimensions must be > 0, got {shape:?}",
+        );
         Self {
             data,
             shape: shape.to_vec(),
