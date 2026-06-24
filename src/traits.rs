@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::tensor::Tensor;
+use serde::{Deserialize, Serialize};
 
 pub trait Transformer {
     fn hidden_states(&self, token_ids: &[u32]) -> Tensor;
@@ -15,7 +16,7 @@ pub trait SpikingNetwork {
     fn num_channels(&self) -> usize;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NeuroModulators {
     pub dopamine: f32,
     pub cortisol: f32,
