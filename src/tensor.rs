@@ -28,6 +28,10 @@ impl Tensor {
     }
 
     pub fn zeros(shape: &[usize]) -> Self {
+        assert!(
+            shape.iter().all(|&d| d > 0),
+            "Tensor::zeros: shape dimensions must be > 0, got {shape:?}",
+        );
         let len: usize = shape.iter().product();
         Self {
             data: vec![0.0; len],
