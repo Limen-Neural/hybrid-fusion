@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 description = "Pure-Rust orchestrator: cortex-tensor transformer + engram-parser GGUF loader + neuromod spiking dynamics. Zero Candle, zero GPU, zero Julia dependencies."
 repository = "https://github.com/Limen-Neural/hybrid-fusion"
-license = "GPL-3.0-or-later"
+license = "MIT OR Apache-2.0"
 keywords = ["neuromorphic", "snn", "llm", "transformer", "hybrid"]
 categories = ["science", "algorithms"]
 readme = "README.md"
@@ -16,9 +16,6 @@ path = "src/lib.rs"
 
 # ── Core pure-Rust stack ──────────────────────────────────────────────────────
 [dependencies]
-cortex-tensor = { path = "../cortex-tensor" }
-engram-parser = { path = "../engram-parser" }
-neuromod      = { version = "0.4.0", path = "../Limen-Neural/neuromod" }
 
 # ── Serialisation / Utility ────────────────────────────────────────────────────
 serde      = { version = "1.0", features = ["derive"] }

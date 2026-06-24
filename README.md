@@ -1,93 +1,79 @@
 # hybrid-fusion
 
-**Pure-Rust master orchestrator for a hybrid transformer ↔ spiking neural
+[![CI](https://github.com/Limen-Neural/hybrid-fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/Limen-Neural/hybrid-fusion/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
+**Pure-Rust master orchestrator for a hybrid transformer <-> spiking neural
 network stack.** Zero Candle, zero CUDA, zero Julia.
 
-`hybrid-fusion` wires together three focused crates:
+`hybrid-fusion` defines the orchestration contract for piping transformer
+hidden states into spiking neural network dynamics. It is intentionally
+**backend-agnostic**: transformer and SNN implementations are injected via
+traits (`Transformer`, `SpikingNetwork`), so downstream consumers choose
+their own math engines.
 
-| Crate | Role |
-|-------|------|
-| [`cortex-tensor`](https://github.com/Limen-Neural/cortex-tensor) | Tensor, transformer, and MoE math. |
-| [`engram-parser`](https://github.com/Limen-Neural/engram-parser) | Zero-dep GGUF checkpoint parser. |
-| [`neuromod`](https://github.com/Limen-Neural/neuromod) 0.4.0 | LIF / Izhikevich spiking dynamics. |
-
-The crate exposes a single orchestrator, `HybridNetwork`, that pipes a
-prompt through the transformer, reduces the resulting hidden state into a
-bounded stimulus vector, and steps a `neuromod::SpikingNetwork`.
-
-## Forward-pass data flow
+## Architecture
 
 ```text
 token_ids: &[u32]
-     │
-     ▼  cortex_tensor::TransformerLM::hidden_states
-cortex_tensor::Tensor   [seq_len, dim]
-     │
-     ▼  projector::embed_to_stimuli_with_width   (pool → resize → tanh)
-stimuli: Vec<f32>       ∈ [-1, 1], length == snn.num_channels
-     │
-     ▼  neuromod::SpikingNetwork::step(&stimuli, &modulators)
+     |
+     v  Transformer::hidden_states
+Tensor   [seq_len, dim]
+     |
+     v  projector::embed_to_stimuli_with_width   (pool -> resize -> tanh)
+stimuli: Vec<f32>       in [-1, 1], length == snn.num_channels()
+     |
+     v  SpikingNetwork::step(&stimuli, &modulators)
 fired_neurons: Vec<usize>
 ```
 
 The `tanh` squash is applied **after** pooling and resizing so the values
-fed into the SNN are always bounded — `neuromod` requires bounded input
-to prevent membrane-voltage blow-ups.
+fed into the SNN are always bounded.
+
+## Scope / Boundaries
+
+This crate **owns**:
+- Orchestration of hybrid ANN -> SNN forward-pass paths.
+- Transformer hidden-state pooling and resizing into bounded SNN stimuli.
+- The public `HybridNetwork<T, S>` API and error boundaries.
+
+This crate **does not own**:
+- Tensor/transformer/MoE math -> see [`cortex-tensor`](https://github.com/Limen-Neural/cortex-tensor).
+- GGUF parsing and weight layout -> see [`engram-parser`](https://github.com/Limen-Neural/engram-parser).
+- Neuron dynamics and SNN integration internals -> see [`neuromod`](https://github.com/Limen-Neural/neuromod).
+
+See [LIM-9](https://github.com/Limen-Neural/hybrid-fusion/issues/5) for the
+full boundary matrix.
 
 ## Quick start
 
 ```rust
-use hybrid_fusion::{HybridConfig, HybridNetwork, NeuroModulators};
+use hybrid_fusion::{HybridConfig, HybridNetwork, NeuroModulators, Transformer, SpikingNetwork};
+use hybrid_fusion::Tensor;
+use hybrid_fusion::Result;
 
-let mut net = HybridNetwork::from_config(HybridConfig::tiny())?;
-
-let token_ids = [1u32, 2, 3, 4];
-let modulators = NeuroModulators::default();
-
-let out = net.forward(&token_ids, Some(modulators))?;
-
-assert_eq!(out.embedding.len(), net.transformer.config.dim);
-assert_eq!(out.stimuli.len(), net.snn.num_channels);
-# Ok::<(), hybrid_fusion::HybridError>(())
-```
-
-Run the bundled telemetry demo:
-
-```bash
-cargo run --example hybrid_telemetry
+// Implement traits for your backend, then wire them:
+// let mut net = HybridNetwork::new(my_transformer, my_snn, HybridConfig::tiny());
+// let out = net.forward(&[1u32, 2, 3, 4], None)?;
 ```
 
 ## Public surface
 
 | Item | Purpose |
 |------|---------|
-| `HybridNetwork::new(transformer, snn, config)` | Explicit constructor. |
-| `HybridNetwork::from_config(HybridConfig)` | Build from a config only (random weights). |
-| `HybridNetwork::load_weights_from_gguf(path)` | Parses GGUF layout via `engram-parser`. **TODO:** tensor binding pending a public `cortex-tensor` loader — surfaces an explicit `HybridError::UnsupportedFormat` rather than fabricating weights. |
-| `HybridNetwork::forward(&[u32], Option<NeuroModulators>)` | Transformer → projector → SNN. |
-| `projector::embed_to_stimuli(&Tensor)` | Pool + tanh-squash, width = embedding dim. |
-| `projector::embed_to_stimuli_with_width(&Tensor, width)` | Pool → resize → tanh to a caller-chosen width. |
-| `HybridConfig::tiny()` / `::olmo_1b()` | Predefined transformer + SNN shapes. |
-
-All dimensions are **dynamic**. No hardcoded `16`-channel bottlenecks,
-no fixed `EMBEDDING_DIM = 2048`, no `NUM_INPUT_CHANNELS` constants leak
-through the public API.
-
-## What this crate is **not**
-
-- **Not** a training framework. `neuromod` handles spike dynamics; any
-  learning loop (e.g. reward-modulated STDP) lives upstream.
-- **Not** a tokenizer. Callers pass `&[u32]` token IDs directly.
-- **Not** a Candle bridge. The previous `spike-lmo` / Candle-era fusion
-  engine, the `SnnLlmFusion` math, the `OLMoE` MoE wrapper, the
-  `DenseModel` trait, and the `spikenaut-spine` ZMQ distill publisher
-  have all been removed from this crate.
+| `HybridNetwork<T, S>` | Generic orchestrator over any `Transformer` + `SpikingNetwork`. |
+| `Transformer` trait | Backend-agnostic transformer interface. |
+| `SpikingNetwork` trait | Backend-agnostic SNN interface. |
+| `NeuroModulators` | Neuromodulator struct passed to SNN steps. |
+| `HybridConfig` / `TransformerConfig` | Predefined configs (`tiny`, `olmo_1b`). |
+| `projector::embed_to_stimuli_with_width` | Pool -> resize -> tanh adapter. |
+| `Tensor` | Lightweight owned tensor (data + shape). |
 
 ## Status
 
-Experimental. API is expected to change as `cortex-tensor` exposes its
-GGUF loader and as the projector grows richer pooling modes.
+Experimental. API is expected to change as backend crates evolve.
 
 ## License
 
-GPL-3.0-or-later.
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE)
+at your option.
