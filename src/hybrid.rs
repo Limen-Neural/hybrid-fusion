@@ -1,55 +1,20 @@
-//! Master orchestrator.
-//!
-//! `HybridNetwork` stitches together three pure-Rust dependencies:
-//!
-//! | Crate | Role |
-//! |-------|------|
-//! | [`cortex_tensor::transformer::TransformerLM`] | Transformer forward pass (no Candle). |
-//! | [`crate::projector`] | Pool + bounded-squash LLM hidden state → SNN stimulus. |
-//! | [`neuromod::SpikingNetwork`] | LIF + Izhikevich spiking dynamics. |
-//!
-//! GGUF weight loading is delegated to `engram_parser::load_gguf`; the
-//! actual tensor-to-`TransformerLM` binding is left as a **TODO** until
-//! `cortex-tensor` exposes a public loader. No stubbed / fabricated
-//! weights are injected.
-//!
-//! ## Forward-pass data flow
-//!
-//! ```text
-//!   token_ids: &[u32]
-//!        │
-//!        ▼  transformer.hidden_states(token_ids)
-//!   cortex_tensor::Tensor  [seq_len, dim]
-//!        │
-//!        ▼  projector::embed_to_stimuli_with_width(&hidden, snn.num_channels)
-//!   stimuli: Vec<f32>     (tanh-bounded, dynamic length)
-//!        │
-//!        ▼  snn.step(&stimuli, &modulators)
-//!   fired_neurons: Vec<usize>
-//! ```
-
-use cortex_tensor::transformer::{TransformerConfig, TransformerLM};
-use neuromod::{NeuroModulators, SpikingNetwork};
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::error::{HybridError, Result};
 use crate::projector;
+use crate::tensor::Tensor;
+use crate::traits::{NeuroModulators, SpikingNetwork, Transformer};
 use crate::types::{HybridConfig, HybridOutput};
 
-/// Master orchestrator over `cortex-tensor` + `neuromod`.
-pub struct HybridNetwork {
-    /// Pure-Rust transformer (Candle-free).
-    pub transformer: TransformerLM,
-    /// Spiking neural network (LIF + Izhikevich).
-    pub snn: SpikingNetwork,
-    /// Orchestrator config.
+pub struct HybridNetwork<T: Transformer, S: SpikingNetwork> {
+    pub transformer: T,
+    pub snn: S,
     config: HybridConfig,
-    /// Monotonic forward-pass counter.
     global_step: u64,
 }
 
-impl HybridNetwork {
-    /// Build a `HybridNetwork` from an explicit transformer + SNN.
-    pub fn new(transformer: TransformerLM, snn: SpikingNetwork, config: HybridConfig) -> Self {
+impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
+    pub fn new(transformer: T, snn: S, config: HybridConfig) -> Self {
         Self {
             transformer,
             snn,
@@ -58,66 +23,6 @@ impl HybridNetwork {
         }
     }
 
-    /// Build a `HybridNetwork` from a [`HybridConfig`] alone.
-    ///
-    /// Instantiates a fresh `TransformerLM` with randomised weights and a
-    /// `SpikingNetwork` sized to the configured LIF / Izhikevich banks and
-    /// input channels. Suitable for tests and stub runs.
-    pub fn from_config(config: HybridConfig) -> Result<Self> {
-        if config.snn_input_channels == 0 {
-            return Err(HybridError::InvalidConfig(
-                "snn_input_channels must be > 0".into(),
-            ));
-        }
-        if config.snn_lif_neurons == 0 {
-            return Err(HybridError::InvalidConfig(
-                "snn_lif_neurons must be > 0".into(),
-            ));
-        }
-
-        let transformer = TransformerLM::new(config.transformer.clone());
-        let snn = SpikingNetwork::with_dimensions(
-            config.snn_lif_neurons,
-            config.snn_izh_neurons,
-            config.snn_input_channels,
-        );
-        Ok(Self::new(transformer, snn, config))
-    }
-
-    /// Load transformer weights from a GGUF checkpoint.
-    ///
-    /// ⚠ **Incomplete:** this function parses the GGUF layout via
-    /// `engram_parser::load_gguf` and reports its metadata through
-    /// [`HybridError::ModelLoad`] / [`HybridError::UnsupportedFormat`],
-    /// **but does not yet bind tensors into `TransformerLM`**. Weight
-    /// binding will be added in a follow-up PR once `cortex-tensor`
-    /// exposes a public GGUF loader. No fabricated / zero-weights are
-    /// substituted — callers receive an explicit
-    /// [`HybridError::UnsupportedFormat`] until the loader is wired.
-    pub fn load_weights_from_gguf(&mut self, path: &str) -> Result<()> {
-        let layout = engram_parser::load_gguf(path).map_err(|e| HybridError::GgufParse(format!("{e:?}")))?;
-        let arch = layout.metadata.architecture().to_string();
-
-        // TODO(cortex-tensor): wire the tensor directory into TransformerLM
-        //   once `cortex_tensor::transformer::TransformerLM` gains a public
-        //   loader (e.g. `TransformerLM::from_gguf_layout(&layout)`).
-        //   Until then, surface a clean error so callers don't receive
-        //   silently-broken random weights.
-        Err(HybridError::UnsupportedFormat(format!(
-            "GGUF weight binding not yet implemented (path='{path}', arch='{arch}'). \
-             Parsed {} tensors; waiting on cortex-tensor public loader.",
-            layout.tensors.len()
-        )))
-    }
-
-    /// Run the orchestrator for a single prompt.
-    ///
-    /// 1. Transformer → hidden state `[seq_len, dim]`.
-    /// 2. Projector → `Vec<f32>` stimulus of length `self.snn.num_channels`
-    ///    (pool → resize → **tanh**).
-    /// 3. SNN → fired neuron indices.
-    ///
-    /// `modulators` defaults to `NeuroModulators::default()` when `None`.
     pub fn forward(
         &mut self,
         token_ids: &[u32],
@@ -129,27 +34,25 @@ impl HybridNetwork {
                 got: 0,
             });
         }
-        if token_ids.len() > self.transformer.config.max_seq_len {
+        if token_ids.len() > self.transformer.max_seq_len() {
             return Err(HybridError::InputLengthMismatch {
-                expected: self.transformer.config.max_seq_len,
+                expected: self.transformer.max_seq_len(),
                 got: token_ids.len(),
             });
         }
 
-        // ── 1. Transformer forward (hidden state) ─────────────────────────
         let hidden = self.transformer.hidden_states(token_ids);
-
-        // Mean-pool across the sequence axis → `dim`-long embedding. This
-        // is also what the projector does internally, but we keep a copy
-        // for the `HybridOutput.embedding` field so downstream callers can
-        // inspect the raw pooled hidden state without re-running the net.
-        let embedding = pool_embedding(&hidden, self.transformer.config.dim);
-
-        // ── 2. Projector → SNN stimulus (dynamic width, bounded) ──────────
-        let snn_width = self.snn.num_channels;
+        if hidden.ndim() == 2 && hidden.shape()[1] != self.transformer.dim() {
+            return Err(HybridError::InvalidConfig(format!(
+                "hidden state dim={} does not match transformer.dim()={}",
+                hidden.shape()[1],
+                self.transformer.dim(),
+            )));
+        }
+        let embedding = pool_embedding(&hidden, self.transformer.dim());
+        let snn_width = self.snn.num_channels();
         let stimuli = projector::embed_to_stimuli_with_width(&hidden, snn_width);
 
-        // ── 3. SNN step ───────────────────────────────────────────────────
         let modulators = modulators.unwrap_or_default();
         let fired_neurons = self.snn.step(&stimuli, &modulators)?;
 
@@ -163,28 +66,20 @@ impl HybridNetwork {
         })
     }
 
-    // ── Accessors ─────────────────────────────────────────────────────────
-
     pub fn config(&self) -> &HybridConfig {
         &self.config
     }
+
     pub fn global_step(&self) -> u64 {
         self.global_step
     }
-    pub fn transformer_config(&self) -> &TransformerConfig {
-        &self.transformer.config
-    }
+
     pub fn reset(&mut self) {
         self.global_step = 0;
     }
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// Mean-pool a `[seq, dim]` or 1-D tensor down to a `Vec<f32>` of length `dim`.
-/// Kept private so `HybridOutput.embedding` always matches the transformer's
-/// declared hidden size, regardless of the SNN's input width.
-fn pool_embedding(hidden: &cortex_tensor::Tensor, dim: usize) -> Vec<f32> {
+fn pool_embedding(hidden: &Tensor, dim: usize) -> Vec<f32> {
     if hidden.ndim() == 1 {
         return hidden.data().to_vec();
     }
@@ -210,86 +105,113 @@ fn pool_embedding(hidden: &cortex_tensor::Tensor, dim: usize) -> Vec<f32> {
     hidden.data().iter().copied().take(dim).collect()
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
+    use crate::tensor::Tensor;
+    use crate::traits::{NeuroModulators, SpikingNetwork, Transformer};
     use crate::types::HybridConfig;
 
-    fn build_network() -> HybridNetwork {
-        HybridNetwork::from_config(HybridConfig::tiny()).expect("tiny config must build")
+    struct MockTransformer {
+        dim: usize,
+        max_seq: usize,
+    }
+
+    impl Transformer for MockTransformer {
+        fn hidden_states(&self, token_ids: &[u32]) -> Tensor {
+            let seq = token_ids.len();
+            let data: Vec<f32> = (0..seq * self.dim).map(|i| (i as f32) * 0.01).collect();
+            Tensor::from_vec(data, &[seq, self.dim])
+        }
+        fn dim(&self) -> usize {
+            self.dim
+        }
+        fn max_seq_len(&self) -> usize {
+            self.max_seq
+        }
+        fn param_count(&self) -> usize {
+            self.dim * 1000
+        }
+    }
+
+    struct MockSnn {
+        channels: usize,
+    }
+
+    impl SpikingNetwork for MockSnn {
+        fn step(&mut self, stimuli: &[f32], _modulators: &NeuroModulators) -> Result<Vec<usize>> {
+            Ok(stimuli
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| **v > 0.0)
+                .map(|(i, _)| i)
+                .collect())
+        }
+        fn num_channels(&self) -> usize {
+            self.channels
+        }
+    }
+
+    fn build_network() -> HybridNetwork<MockTransformer, MockSnn> {
+        let cfg = HybridConfig::tiny();
+        let t = MockTransformer {
+            dim: cfg.transformer.dim,
+            max_seq: cfg.transformer.max_seq_len,
+        };
+        let s = MockSnn {
+            channels: cfg.snn_input_channels,
+        };
+        HybridNetwork::new(t, s, cfg)
     }
 
     #[test]
     fn test_forward_shape_and_bounds() {
         let mut net = build_network();
-        let token_ids = vec![1u32, 2, 3, 4];
-        let out = net
-            .forward(&token_ids, None)
-            .expect("forward must succeed on tiny config");
-
-        // embedding == transformer dim
-        assert_eq!(out.embedding.len(), net.transformer.config.dim);
-        // stimuli == snn num_channels (decoupled from transformer dim)
-        assert_eq!(out.stimuli.len(), net.snn.num_channels);
-        // tanh-bounded
+        let out = net.forward(&[1, 2, 3, 4], None).expect("forward ok");
+        assert_eq!(out.embedding.len(), 128);
+        assert_eq!(out.stimuli.len(), 64);
         for v in &out.stimuli {
-            assert!(v.abs() <= 1.0, "stimulus out of (-1, 1): {v}");
+            assert!(v.abs() <= 1.0);
         }
         assert_eq!(out.global_step, 1);
     }
 
     #[test]
-    fn test_forward_rejects_empty_prompt() {
+    fn test_forward_rejects_empty() {
         let mut net = build_network();
-        let err = net.forward(&[], None).unwrap_err();
-        matches!(err, HybridError::InputLengthMismatch { .. });
+        assert!(net.forward(&[], None).is_err());
     }
 
     #[test]
-    fn test_forward_rejects_over_long_prompt() {
+    fn test_forward_rejects_over_long() {
         let mut net = build_network();
-        let too_long = vec![0u32; net.transformer.config.max_seq_len + 1];
-        let err = net.forward(&too_long, None).unwrap_err();
-        matches!(err, HybridError::InputLengthMismatch { .. });
+        let too_long = vec![0u32; 65];
+        assert!(net.forward(&too_long, None).is_err());
     }
 
     #[test]
     fn test_global_step_increments() {
         let mut net = build_network();
-        let ids = vec![7u32, 8];
-        net.forward(&ids, None).unwrap();
-        net.forward(&ids, None).unwrap();
+        net.forward(&[0, 1], None).unwrap();
+        net.forward(&[0, 1], None).unwrap();
         assert_eq!(net.global_step(), 2);
         net.reset();
         assert_eq!(net.global_step(), 0);
     }
 
     #[test]
-    fn test_invalid_config_rejected() {
-        let mut cfg = HybridConfig::tiny();
-        cfg.snn_input_channels = 0;
-        assert!(HybridNetwork::from_config(cfg).is_err());
-    }
-
-    #[test]
-    fn test_load_weights_from_gguf_surfaces_error_when_path_bogus() {
-        let mut net = build_network();
-        let err = net
-            .load_weights_from_gguf("/nonexistent/path/model.gguf")
-            .unwrap_err();
-        matches!(err, HybridError::GgufParse(_));
-    }
-
-    #[test]
     fn test_snn_width_independent_from_transformer_dim() {
-        // Force a mismatch: transformer.dim == 128, snn input == 7.
         let mut cfg = HybridConfig::tiny();
         cfg.snn_input_channels = 7;
-        let mut net = HybridNetwork::from_config(cfg).unwrap();
-        let out = net.forward(&[0u32, 1, 2], None).unwrap();
+        let t = MockTransformer {
+            dim: cfg.transformer.dim,
+            max_seq: cfg.transformer.max_seq_len,
+        };
+        let s = MockSnn { channels: 7 };
+        let mut net = HybridNetwork::new(t, s, cfg);
+        let out = net.forward(&[0, 1, 2], None).unwrap();
         assert_eq!(out.stimuli.len(), 7);
-        assert_eq!(out.embedding.len(), net.transformer.config.dim);
+        assert_eq!(out.embedding.len(), 128);
     }
 }
