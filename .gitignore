@@ -25,4 +25,10 @@ Thumbs.db
 
 # Temporary / Scratch
 /tmp/
+
+# AI/Agent tooling
+.mimocode/
 .kilo/
+.cursor/
+.codex/
+.beads/
