@@ -71,6 +71,10 @@ use hybrid_fusion::Result;
 | `projector::embed_to_stimuli_with_width` | Pool -> resize -> tanh adapter. |
 | `Tensor` | Lightweight owned tensor (data + shape). |
 
+## Guides
+
+- **[Implementing a Backend](docs/implementing-backends.md)** — trait contracts, data flow, tensor shape conventions, and a minimal working example for `Transformer` + `SpikingNetwork`.
+
 ## Status
 
 Experimental. API is expected to change as backend crates evolve.
