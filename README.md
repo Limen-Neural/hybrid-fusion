@@ -74,6 +74,48 @@ use hybrid_fusion::Result;
 ## Guides
 
 - **[Implementing a Backend](docs/implementing-backends.md)** — trait contracts, data flow, tensor shape conventions, and a minimal working example for `Transformer` + `SpikingNetwork`.
+## Error monitoring (optional)
+
+`hybrid-fusion` ships an optional
+[Sentry](https://docs.sentry.io/platforms/rust/) integration for error
+reporting in downstream services.
+
+### Enabling
+
+Add the feature flag when building:
+
+```sh
+cargo build --features sentry
+```
+
+### Configuration
+
+Set the `SENTRY_DSN` environment variable to your Sentry project DSN.
+**Do not commit DSNs** — pass them at runtime or via a secrets manager.
+
+```sh
+export SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+```
+
+### Initialisation pattern
+
+Guard the init call so the application starts cleanly even without a DSN:
+
+```rust
+let _guard = sentry::init((
+    std::env::var("SENTRY_DSN").unwrap_or_default(),
+    sentry::ClientOptions {
+        release: sentry::release_name!(),
+        ..Default::default()
+    },
+));
+```
+
+The `_guard` must be held for the lifetime of the application — dropping it
+flushes pending events and shuts down the transport.
+
+See [`examples/sentry_init.rs`](examples/sentry_init.rs) for a full working
+example.
 
 ## Status
 
