@@ -361,7 +361,7 @@ This example implements both traits with trivial math and wires them into
 
 ```rust
 use hybrid_fusion::{
-    HybridConfig, HybridNetwork, HybridOutput, NeuroModulators,
+    HybridConfig, HybridError, HybridNetwork, HybridOutput, NeuroModulators,
     Result, SpikingNetwork, Tensor, Transformer,
 };
 
