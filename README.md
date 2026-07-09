@@ -77,15 +77,25 @@ use hybrid_fusion::Result;
 ## Error monitoring (optional)
 
 `hybrid-fusion` ships an optional
-[Sentry](https://docs.sentry.io/platforms/rust/) integration for error
-reporting in downstream services.
+[Sentry](https://docs.sentry.io/platforms/rust/) integration. When the
+`sentry` feature is enabled:
+
+1. The `sentry` crate is **re-exported** as `hybrid_fusion::sentry` so
+   applications share the same crate version and global hub as the library.
+2. `HybridNetwork::forward` captures `HybridError`s via
+   `telemetry::capture_error` before returning them to the caller.
+3. Panic capture is enabled through the underlying Sentry client features.
+
+**Note:** enabling `sentry` pulls a sizable transitive dependency tree
+(reqwest/hyper/tokio/ring). Prefer it in service binaries, not lean library
+builds.
 
 ### Enabling
 
-Add the feature flag when building:
-
 ```sh
 cargo build --features sentry
+# or, with the reference backends:
+cargo build --features "sentry,backends"
 ```
 
 ### Configuration
@@ -97,15 +107,21 @@ Set the `SENTRY_DSN` environment variable to your Sentry project DSN.
 export SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
 ```
 
+Sentry's Rust SDK reads `SENTRY_DSN` automatically; an empty/missing DSN
+disables transport (safe no-op for local dev).
+
 ### Initialisation pattern
 
-Guard the init call so the application starts cleanly even without a DSN:
+Always initialise through the **re-export** so events raised inside
+`hybrid-fusion` land on the same hub:
 
 ```rust
-let _guard = sentry::init((
+// Requires: hybrid-fusion = { version = "0.2", features = ["sentry"] }
+let _guard = hybrid_fusion::sentry::init((
+    // Empty string / missing env → client is disabled (no network).
     std::env::var("SENTRY_DSN").unwrap_or_default(),
-    sentry::ClientOptions {
-        release: sentry::release_name!(),
+    hybrid_fusion::sentry::ClientOptions {
+        release: hybrid_fusion::sentry::release_name!(),
         ..Default::default()
     },
 ));
@@ -115,7 +131,7 @@ The `_guard` must be held for the lifetime of the application — dropping it
 flushes pending events and shuts down the transport.
 
 See [`examples/sentry_init.rs`](examples/sentry_init.rs) for a full working
-example.
+example (`cargo run --features sentry --example sentry_init`).
 
 ## Status
 

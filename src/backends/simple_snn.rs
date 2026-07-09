@@ -45,26 +45,31 @@ impl SimpleSnn {
 
 impl SpikingNetwork for SimpleSnn {
     fn step(&mut self, stimuli: &[f32], modulators: &NeuroModulators) -> Result<Vec<usize>> {
-        let n = self.num_channels.min(stimuli.len());
+        // Apply leak to every channel; only channels with a corresponding
+        // stimulus receive new input (short stimuli never leave stale membrane
+        // state without decay).
         let mut fired = Vec::new();
 
-        let dopamine_gain = 1.0 + modulators.dopamine * 0.5
-            + modulators.aux_dopamine * 0.25;
+        let dopamine_gain = 1.0 + modulators.dopamine * 0.5 + modulators.aux_dopamine * 0.25;
         let cortisol_suppress = (1.0 - modulators.cortisol * 0.3).max(0.1);
         let ach_leak_scale = 1.0 + modulators.acetylcholine * 0.3;
-        let effective_leak = (self.leak_factor * ach_leak_scale * modulators.tempo).min(1.0);
+        // Clamp tempo to non-negative so leak decays (never amplifies) membrane.
+        let tempo = modulators.tempo.max(0.0);
+        let effective_leak = (self.leak_factor * ach_leak_scale * tempo).clamp(0.0, 1.0);
 
-        for i in 0..n {
+        for (i, pot) in self.membrane_potentials.iter_mut().enumerate() {
             // 1. Leak toward zero.
-            self.membrane_potentials[i] *= 1.0 - effective_leak;
+            *pot *= 1.0 - effective_leak;
 
-            // 2. Add stimulus with modulator scaling.
-            self.membrane_potentials[i] += stimuli[i] * dopamine_gain * cortisol_suppress;
+            // 2. Add stimulus with modulator scaling (only where provided).
+            if let Some(&stim) = stimuli.get(i) {
+                *pot += stim * dopamine_gain * cortisol_suppress;
+            }
 
             // 3. Spike if above threshold.
-            if self.membrane_potentials[i] >= self.threshold {
+            if *pot >= self.threshold {
                 fired.push(i);
-                self.membrane_potentials[i] = 0.0;
+                *pot = 0.0;
             }
         }
 
@@ -83,15 +88,37 @@ mod tests {
     #[test]
     fn fires_when_above_threshold() {
         let mut snn = SimpleSnn::with_params(4, 1.0, 0.0);
-        let fired = snn.step(&[1.5, 0.0, 0.0, 0.0], &NeuroModulators::default()).unwrap();
+        let fired = snn
+            .step(&[1.5, 0.0, 0.0, 0.0], &NeuroModulators::default())
+            .unwrap();
         assert_eq!(fired, vec![0usize]);
     }
 
     #[test]
     fn no_fire_below_threshold() {
         let mut snn = SimpleSnn::with_params(4, 1.0, 0.0);
-        let fired = snn.step(&[0.5, 0.0, 0.0, 0.0], &NeuroModulators::default()).unwrap();
+        let fired = snn
+            .step(&[0.5, 0.0, 0.0, 0.0], &NeuroModulators::default())
+            .unwrap();
         assert!(fired.is_empty());
+    }
+
+    #[test]
+    fn negative_tempo_does_not_amplify_membrane() {
+        let mut snn = SimpleSnn::with_params(1, 10.0, 0.5);
+        let mods = NeuroModulators {
+            tempo: -2.0,
+            ..Default::default()
+        };
+        snn.step(&[0.4], &mods).unwrap();
+        // After leak with clamped tempo=0, potential stays at stimulus (no amp).
+        // A second step with zero stimulus and negative tempo must not grow it.
+        snn.step(&[0.0], &mods).unwrap();
+        let fired = snn.step(&[0.0], &mods).unwrap();
+        assert!(
+            fired.is_empty(),
+            "membrane must not amplify under neg tempo"
+        );
     }
 
     #[test]

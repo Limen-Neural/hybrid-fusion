@@ -30,16 +30,14 @@ impl SimpleTransformer {
         let dim = config.dim;
 
         let mut lcg = Lcg::new(
-            (vocab_size as u64).wrapping_mul(2654435761)
-                ^ (dim as u64).wrapping_mul(2246822519),
+            (vocab_size as u64).wrapping_mul(2654435761) ^ (dim as u64).wrapping_mul(2246822519),
         );
 
+        // next_f32() already returns [-1, 1); scale by 0.01 → symmetric [-0.01, 0.01).
         let embeddings = (0..vocab_size * dim)
-            .map(|_| lcg.next_f32() * 0.02 - 0.01)
+            .map(|_| lcg.next_f32() * 0.01)
             .collect();
-        let projection = (0..dim * dim)
-            .map(|_| lcg.next_f32() * 0.02 - 0.01)
-            .collect();
+        let projection = (0..dim * dim).map(|_| lcg.next_f32() * 0.01).collect();
 
         Self {
             vocab_size,
@@ -101,7 +99,10 @@ impl Lcg {
     }
 
     fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0
     }
 
@@ -137,7 +138,27 @@ mod tests {
     fn determinism() {
         let t1 = SimpleTransformer::new(tiny_config());
         let t2 = SimpleTransformer::new(tiny_config());
-        assert_eq!(t1.hidden_states(&[3, 5]).data(), t2.hidden_states(&[3, 5]).data());
+        assert_eq!(
+            t1.hidden_states(&[3, 5]).data(),
+            t2.hidden_states(&[3, 5]).data()
+        );
+    }
+
+    #[test]
+    fn weight_init_is_symmetric_around_zero() {
+        let t = SimpleTransformer::new(tiny_config());
+        // With the corrected scaling, a non-trivial fraction of embeddings
+        // should be positive (the previous bias pushed almost everything < 0).
+        let positives = t
+            .hidden_states(&[0, 1, 2, 3, 4, 5, 6, 7])
+            .data()
+            .iter()
+            .filter(|v| **v > 0.0)
+            .count();
+        assert!(
+            positives > 0,
+            "expected some positive hidden values after unbiased init"
+        );
     }
 
     #[test]

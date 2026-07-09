@@ -2,6 +2,7 @@
 
 use crate::error::{HybridError, Result};
 use crate::projector;
+use crate::telemetry;
 use crate::tensor::Tensor;
 use crate::traits::{NeuroModulators, SpikingNetwork, Transformer};
 use crate::types::{HybridConfig, HybridOutput};
@@ -29,13 +30,13 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         modulators: Option<NeuroModulators>,
     ) -> Result<HybridOutput> {
         if token_ids.is_empty() {
-            return Err(HybridError::InputLengthMismatch {
+            return telemetry::report(HybridError::InputLengthMismatch {
                 expected: 1,
                 got: 0,
             });
         }
         if token_ids.len() > self.transformer.max_seq_len() {
-            return Err(HybridError::InputLengthMismatch {
+            return telemetry::report(HybridError::InputLengthMismatch {
                 expected: self.transformer.max_seq_len(),
                 got: token_ids.len(),
             });
@@ -43,7 +44,7 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
 
         let hidden = self.transformer.hidden_states(token_ids);
         if hidden.ndim() == 2 && hidden.shape()[1] != self.transformer.dim() {
-            return Err(HybridError::InvalidConfig(format!(
+            return telemetry::report(HybridError::InvalidConfig(format!(
                 "hidden state dim={} does not match transformer.dim()={}",
                 hidden.shape()[1],
                 self.transformer.dim(),
@@ -54,7 +55,13 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         let stimuli = projector::embed_to_stimuli_with_width(&hidden, snn_width);
 
         let modulators = modulators.unwrap_or_default();
-        let fired_neurons = self.snn.step(&stimuli, &modulators)?;
+        let fired_neurons = match self.snn.step(&stimuli, &modulators) {
+            Ok(fired) => fired,
+            Err(err) => {
+                telemetry::capture_error(&err);
+                return Err(err);
+            }
+        };
 
         self.global_step = self.global_step.saturating_add(1);
 

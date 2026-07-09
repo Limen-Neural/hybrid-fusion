@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Placeholder demo kept on main until the optional `sentry` feature lands
-// (see PR #19). This binary exercises HybridNetwork without a Sentry dep so
-// default CI (`cargo clippy --all-targets`) stays green.
+// Demonstrates guarded Sentry initialisation via the hybrid-fusion re-export.
 //
-// When the `sentry` feature is available, prefer:
-//   cargo run --features sentry --example sentry_init
-// and initialise via `hybrid_fusion::sentry::init(...)`.
+// Run with:
+//   SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0 \
+//     cargo run --features sentry --example sentry_init
+//
+// Without SENTRY_DSN the client stays disabled (no network traffic).
 
 use hybrid_fusion::{
     HybridConfig, HybridNetwork, NeuroModulators, Result, SpikingNetwork, Tensor, Transformer,
@@ -53,8 +53,14 @@ impl SpikingNetwork for DemoSnn {
 }
 
 fn main() -> Result<()> {
-    println!("Note: full Sentry wiring lives behind the optional `sentry` feature (PR #19).");
-    println!("Set SENTRY_DSN at runtime in your service binary; do not commit DSNs.");
+    // Initialise through the re-export so the library and binary share one hub.
+    let _guard = hybrid_fusion::sentry::init((
+        std::env::var("SENTRY_DSN").unwrap_or_default(),
+        hybrid_fusion::sentry::ClientOptions {
+            release: hybrid_fusion::sentry::release_name!(),
+            ..Default::default()
+        },
+    ));
 
     let cfg = HybridConfig::tiny();
     let transformer = DemoTransformer {
@@ -74,5 +80,16 @@ fn main() -> Result<()> {
         out.fired_neurons.len(),
         out.stimuli[0],
     );
+
+    // Demonstrate a captured error path (empty tokens → InputLengthMismatch).
+    if let Err(err) = net.forward(&[], None) {
+        println!("expected validation error (also reported to Sentry hub): {err}");
+    }
+
+    hybrid_fusion::sentry::capture_message(
+        "hybrid-fusion demo completed",
+        hybrid_fusion::sentry::Level::Info,
+    );
+
     Ok(())
 }
