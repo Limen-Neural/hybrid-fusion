@@ -29,14 +29,16 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         token_ids: &[u32],
         modulators: Option<NeuroModulators>,
     ) -> Result<HybridOutput> {
+        // Caller-side validation errors are returned without Sentry capture so
+        // routine bad requests do not flood the error stream / quota.
         if token_ids.is_empty() {
-            return telemetry::report(HybridError::InputLengthMismatch {
+            return Err(HybridError::InputLengthMismatch {
                 expected: 1,
                 got: 0,
             });
         }
         if token_ids.len() > self.transformer.max_seq_len() {
-            return telemetry::report(HybridError::InputLengthMismatch {
+            return Err(HybridError::InputLengthMismatch {
                 expected: self.transformer.max_seq_len(),
                 got: token_ids.len(),
             });
@@ -44,7 +46,7 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
 
         let hidden = self.transformer.hidden_states(token_ids);
         if hidden.ndim() == 2 && hidden.shape()[1] != self.transformer.dim() {
-            return telemetry::report(HybridError::InvalidConfig(format!(
+            return Err(HybridError::InvalidConfig(format!(
                 "hidden state dim={} does not match transformer.dim()={}",
                 hidden.shape()[1],
                 self.transformer.dim(),
@@ -55,6 +57,7 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         let stimuli = projector::embed_to_stimuli_with_width(&hidden, snn_width);
 
         let modulators = modulators.unwrap_or_default();
+        // Backend/runtime failures are reported when the `sentry` feature is on.
         let fired_neurons = match self.snn.step(&stimuli, &modulators) {
             Ok(fired) => fired,
             Err(err) => {

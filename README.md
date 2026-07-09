@@ -82,9 +82,13 @@ use hybrid_fusion::Result;
 
 1. The `sentry` crate is **re-exported** as `hybrid_fusion::sentry` so
    applications share the same crate version and global hub as the library.
-2. `HybridNetwork::forward` captures `HybridError`s via
-   `telemetry::capture_error` before returning them to the caller.
+2. `HybridNetwork::forward` captures **backend/runtime** failures (e.g. SNN
+   step errors) via `telemetry::capture_error`. Caller validation errors
+   (`InputLengthMismatch`, config mismatches) are returned without capture
+   so routine bad requests do not flood Sentry quota.
 3. Panic capture is enabled through the underlying Sentry client features.
+   Apps can also call `hybrid_fusion::telemetry::capture_error` for their
+   own error paths.
 
 **Note:** enabling `sentry` pulls a sizable transitive dependency tree
 (reqwest/hyper/tokio/ring). Prefer it in service binaries, not lean library
