@@ -4,6 +4,9 @@
 //!
 //! These tests exercise only the public API surface — no `pub(crate)` or internal access —
 //! and serve as usage examples for consumers of the crate.
+//!
+//! Note: `HybridNetwork::{transformer, snn}` are public fields and are part of the public
+//! surface; tests prefer `config()` / output fields when possible.
 
 use hybrid_fusion::{
     HybridConfig, HybridError, HybridNetwork, HybridOutput, NeuroModulators, SpikingNetwork,
@@ -22,6 +25,10 @@ struct MockTransformer {
 impl Transformer for MockTransformer {
     fn hidden_states(&self, token_ids: &[u32]) -> Tensor {
         let seq = token_ids.len();
+        // Guard the Tensor >0 dim invariant even though HybridNetwork::forward
+        // rejects empty token_ids before calling this method.
+        assert!(seq > 0, "token_ids must not be empty");
+        assert!(self.dim > 0, "transformer dim must be > 0");
         let data: Vec<f32> = (0..seq * self.dim).map(|i| (i as f32) * 0.01).collect();
         Tensor::from_vec(data, &[seq, self.dim])
     }
@@ -44,7 +51,11 @@ struct MockSnn {
 }
 
 impl SpikingNetwork for MockSnn {
-    fn step(&mut self, stimuli: &[f32], _modulators: &NeuroModulators) -> hybrid_fusion::Result<Vec<usize>> {
+    fn step(
+        &mut self,
+        stimuli: &[f32],
+        _modulators: &NeuroModulators,
+    ) -> hybrid_fusion::Result<Vec<usize>> {
         Ok(stimuli
             .iter()
             .enumerate()
@@ -55,6 +66,34 @@ impl SpikingNetwork for MockSnn {
 
     fn num_channels(&self) -> usize {
         self.channels
+    }
+}
+
+/// Transformer that reports a positive dim but emits a mismatched hidden width
+/// so `HybridNetwork::forward` hits the InvalidConfig path.
+struct MismatchedDimTransformer {
+    reported_dim: usize,
+    actual_dim: usize,
+    max_seq: usize,
+}
+
+impl Transformer for MismatchedDimTransformer {
+    fn hidden_states(&self, token_ids: &[u32]) -> Tensor {
+        let seq = token_ids.len().max(1);
+        let data = vec![0.1f32; seq * self.actual_dim];
+        Tensor::from_vec(data, &[seq, self.actual_dim])
+    }
+
+    fn dim(&self) -> usize {
+        self.reported_dim
+    }
+
+    fn max_seq_len(&self) -> usize {
+        self.max_seq
+    }
+
+    fn param_count(&self) -> usize {
+        self.reported_dim
     }
 }
 
@@ -83,7 +122,9 @@ fn test_forward_output_shapes() {
     let cfg = HybridConfig::tiny();
     let mut net = build_network();
 
-    let out: HybridOutput = net.forward(&[1, 2, 3, 4], None).expect("forward should succeed");
+    let out: HybridOutput = net
+        .forward(&[1, 2, 3, 4], None)
+        .expect("forward should succeed");
 
     // embedding dimension matches the transformer's hidden dim
     assert_eq!(out.embedding.len(), cfg.transformer.dim);
@@ -93,7 +134,10 @@ fn test_forward_output_shapes() {
 
     // fired_neurons is a subset of valid channel indices
     for &idx in &out.fired_neurons {
-        assert!(idx < cfg.snn_input_channels, "fired neuron index out of range");
+        assert!(
+            idx < cfg.snn_input_channels,
+            "fired neuron index out of range"
+        );
     }
 
     // first forward sets global_step to 1
@@ -104,7 +148,9 @@ fn test_forward_output_shapes() {
 fn test_forward_rejects_empty() {
     let mut net = build_network();
 
-    let err = net.forward(&[], None).expect_err("empty token_ids should fail");
+    let err = net
+        .forward(&[], None)
+        .expect_err("empty token_ids should fail");
     match err {
         HybridError::InputLengthMismatch { expected, got } => {
             assert_eq!(expected, 1);
@@ -169,6 +215,8 @@ fn test_stimuli_bounded() {
 #[test]
 fn test_forward_with_custom_modulators() {
     let mut net = build_network();
+    let cfg_dim = net.config().transformer.dim;
+    let cfg_channels = net.config().snn_input_channels;
 
     let custom = NeuroModulators {
         dopamine: 0.8,
@@ -182,13 +230,67 @@ fn test_forward_with_custom_modulators() {
         .forward(&[10, 20, 30], Some(custom))
         .expect("forward with custom modulators should succeed");
 
-    // basic shape checks still hold
-    assert_eq!(out.embedding.len(), net.transformer.dim());
-    assert_eq!(out.stimuli.len(), net.snn.num_channels());
+    // Prefer public config() over direct field access for shape expectations.
+    assert_eq!(out.embedding.len(), cfg_dim);
+    assert_eq!(out.stimuli.len(), cfg_channels);
     assert_eq!(out.global_step, 1);
 
     // stimuli must still be bounded even with non-default modulators
     for v in &out.stimuli {
         assert!(v.abs() <= 1.0);
+    }
+}
+
+/// Zero-dim tensors are always an error (REVIEW.md). Construction panics at
+/// the Tensor boundary before a bad shape can reach HybridNetwork::forward.
+#[test]
+fn test_tensor_rejects_zero_dimensions() {
+    let cases: &[&[usize]] = &[&[0], &[1, 0], &[0, 4], &[2, 0, 3]];
+    for shape in cases {
+        let result = std::panic::catch_unwind(|| {
+            let len: usize = shape.iter().product();
+            Tensor::from_vec(vec![0.0; len], shape);
+        });
+        assert!(
+            result.is_err(),
+            "Tensor::from_vec should reject zero-dim shape {shape:?}"
+        );
+
+        let result = std::panic::catch_unwind(|| {
+            Tensor::zeros(shape);
+        });
+        assert!(
+            result.is_err(),
+            "Tensor::zeros should reject zero-dim shape {shape:?}"
+        );
+    }
+}
+
+/// Hidden-state width that disagrees with Transformer::dim() is rejected via
+/// the public forward API (InvalidConfig) rather than silently projected.
+#[test]
+fn test_forward_rejects_hidden_dim_mismatch() {
+    let cfg = HybridConfig::tiny();
+    let t = MismatchedDimTransformer {
+        reported_dim: cfg.transformer.dim,
+        actual_dim: cfg.transformer.dim + 8,
+        max_seq: cfg.transformer.max_seq_len,
+    };
+    let s = MockSnn {
+        channels: cfg.snn_input_channels,
+    };
+    let mut net = HybridNetwork::new(t, s, cfg);
+
+    let err = net
+        .forward(&[1, 2, 3], None)
+        .expect_err("mismatched hidden dim should fail");
+    match err {
+        HybridError::InvalidConfig(msg) => {
+            assert!(
+                msg.contains("does not match"),
+                "unexpected InvalidConfig message: {msg}"
+            );
+        }
+        other => panic!("expected InvalidConfig, got {other:?}"),
     }
 }
