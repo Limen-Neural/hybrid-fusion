@@ -1,35 +1,63 @@
 # AGENTS.md — hybrid-fusion
 
+**Version:** 0.2.0 (last updated 2026-07-09)
+
 Context file for AI coding agents working in this repository.
 
-## Crate Purpose
+## Agent identity
 
-`hybrid-fusion` is a **backend-agnostic pure-Rust orchestrator** for hybrid Transformer <-> Spiking Neural Network (SNN) forward-pass pipelines. It depends only on trait abstractions — no concrete math, neuron dynamics, or model-loading implementations live here.
+You are an AI coding agent working on **hybrid-fusion** for the Limen-Neural
+organization. Prefer small, test-backed changes that respect crate boundaries.
+Do not invent concrete backend dependencies in this crate.
 
-## Crate Boundaries
+## Tools available
 
-### This crate OWNS
+Typical local tools for this repo:
 
-- Orchestration of hybrid ANN -> SNN forward-pass paths
+| Tool | Purpose |
+|------|---------|
+| `cargo build` / `cargo test` | Compile and run unit tests |
+| `cargo clippy -- -D warnings` | Lint at CI severity |
+| `cargo fmt` | Format Rust sources |
+| `gh` | GitHub PR / CI inspection (optional) |
+| Editor / language server | Navigate `src/traits.rs` and sibling crates |
+
+Prefer `cargo test --all-features` before pushing CI-sensitive changes.
+
+## Crate purpose
+
+`hybrid-fusion` is a **backend-agnostic pure-Rust orchestrator** for hybrid
+Transformer ↔ Spiking Neural Network (SNN) forward-pass pipelines. It depends
+only on trait abstractions — no concrete math, neuron dynamics, or model-loading
+implementations live here.
+
+## Crate boundaries
+
+### This crate owns
+
+- Orchestration of hybrid artificial neural network (ANN) → SNN forward-pass paths
 - Transformer hidden-state pooling / resizing into bounded SNN stimuli
 - The public `HybridNetwork<T, S>` API and its error boundaries
 - Projector logic (dimensionality reduction from transformer hidden space to SNN input channels)
 - Configuration and output types (`HybridConfig`, `TransformerConfig`, `HybridOutput`)
 
-### This crate does NOT own
+### This crate does not own
 
 | Concern | Owned by |
 |---|---|
 | Tensor / transformer math | `cortex-tensor` |
-| GGUF model parsing | `engram-parser` |
-| SNN neuron dynamics (LIF, Izhikevich) | `neuromod` |
+| GGUF (GPT-Generated Unified Format) model parsing | `engram-parser` |
+| SNN neuron dynamics (leaky integrate-and-fire (LIF), Izhikevich) | `neuromod` |
 | SNN runtime / scheduling | `brainstem-daemon` |
 | Neuromodulator mapping / critic signals | `limbic-critic` |
 | Sensory encoding | `axon-encoder` |
 
-**Rule:** This crate MUST NOT depend on concrete implementations. All backend interaction flows through the trait contracts defined in `src/traits.rs`.
+**Default rule (with escape hatch):** Prefer trait-only interaction with backends.
+Do not add concrete backend implementations to this crate's `Cargo.toml` unless a
+tracked issue explicitly authorizes a temporary exception and documents removal.
+All normal backend interaction flows through the trait contracts in `src/traits.rs`.
 
-## Trait Contracts
+## Trait contracts
 
 Three core traits define the pluggable backend surface:
 
@@ -37,9 +65,9 @@ Three core traits define the pluggable backend surface:
 - **`SpikingNetwork`** — steps the SNN forward given stimuli + neuromodulator state, returns fired neuron indices. Implementations live in `neuromod` / `brainstem-daemon`.
 - **`GgufLoader`** — loads GGUF model layouts from disk. Implementations live in `engram-parser`.
 
-`HybridNetwork<T: Transformer, S: SpikingNetwork>` is generic over the `Transformer` and `SpikingNetwork` traits; `GgufLoader` is consumed separately. Any code that adds a concrete backend dependency to `Cargo.toml` is a boundary violation.
+`HybridNetwork<T: Transformer, S: SpikingNetwork>` is generic over the `Transformer` and `SpikingNetwork` traits; `GgufLoader` is consumed separately. Adding a concrete backend dependency to `Cargo.toml` is a boundary violation unless covered by the escape hatch above.
 
-## Sibling Crates
+## Sibling crates
 
 | Crate | Responsibility |
 |---|---|
@@ -50,7 +78,7 @@ Three core traits define the pluggable backend surface:
 | `limbic-critic` | Neuromodulator-to-critic signal mapping |
 | `axon-encoder` | Sensory input encoding |
 
-## Build & Test
+## Build & test
 
 ```bash
 cargo build
@@ -58,6 +86,7 @@ cargo test --all-features
 cargo clippy -- -D warnings
 ```
 
-## Org Boundary Matrix
+## Org boundary matrix
 
-See [LIM-9](https://github.com/Limen-Neural/hybrid-fusion/issues/5) for the full boundary matrix (cross-crate ownership and dependency rules across the Limen-Neural organisation).
+See [LIM-9 / issue #5](https://github.com/Limen-Neural/hybrid-fusion/issues/5)
+(Limen-Neural boundary matrix) for cross-crate ownership and dependency rules.
