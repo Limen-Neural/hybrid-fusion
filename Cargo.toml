@@ -28,10 +28,14 @@ sentry = { version = "0.34", optional = true, default-features = false, features
 [features]
 default  = []
 sentry   = ["dep:sentry"]
-backends = []
 
 [dev-dependencies]
 serde_json = "1.0"
+proptest   = "1"
+
+[[example]]
+name = "sentry_init"
+required-features = ["sentry"]
 
 [[example]]
 name = "sentry_init"

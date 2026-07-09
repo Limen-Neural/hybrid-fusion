@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Demonstrates guarded Sentry initialisation behind the `sentry` feature flag.
+// Placeholder demo kept on main until the optional `sentry` feature lands
+// (see PR #19). This binary exercises HybridNetwork without a Sentry dep so
+// default CI (`cargo clippy --all-targets`) stays green.
 //
-// Run with:
-//   SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0 cargo run --features sentry --example sentry_init
+// When the `sentry` feature is available, prefer:
+//   cargo run --features sentry --example sentry_init
+// and initialise via `hybrid_fusion::sentry::init(...)`.
 
 use hybrid_fusion::{
     HybridConfig, HybridNetwork, NeuroModulators, Result, SpikingNetwork, Tensor, Transformer,
@@ -50,14 +53,8 @@ impl SpikingNetwork for DemoSnn {
 }
 
 fn main() -> Result<()> {
-    // Guarded Sentry init: only activates if SENTRY_DSN is set.
-    let _guard = sentry::init((
-        std::env::var("SENTRY_DSN").unwrap_or_default(),
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            ..Default::default()
-        },
-    ));
+    println!("Note: full Sentry wiring lives behind the optional `sentry` feature (PR #19).");
+    println!("Set SENTRY_DSN at runtime in your service binary; do not commit DSNs.");
 
     let cfg = HybridConfig::tiny();
     let transformer = DemoTransformer {
@@ -77,9 +74,5 @@ fn main() -> Result<()> {
         out.fired_neurons.len(),
         out.stimuli[0],
     );
-
-    // Example: capture an error event (only sent when SENTRY_DSN is set).
-    sentry::capture_message("hybrid-fusion demo completed", sentry::Level::Info);
-
     Ok(())
 }
