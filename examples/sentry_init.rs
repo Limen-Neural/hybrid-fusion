@@ -81,9 +81,10 @@ fn main() -> Result<()> {
         out.stimuli[0],
     );
 
-    // Demonstrate a captured error path (empty tokens → InputLengthMismatch).
+    // Demonstrate a validation error path (empty tokens → InputLengthMismatch).
+    // Validation errors are returned directly without Sentry capture.
     if let Err(err) = net.forward(&[], None) {
-        println!("expected validation error (also reported to Sentry hub): {err}");
+        println!("expected validation error (not reported to Sentry): {err}");
     }
 
     hybrid_fusion::sentry::capture_message(
