@@ -19,6 +19,7 @@ For authoritative signatures, always refer to [`src/traits.rs`](../src/traits.rs
 6. [Tensor shape conventions](#6-tensor-shape-conventions)
 7. [Minimal working example](#7-minimal-working-example)
 8. [Common pitfalls](#8-common-pitfalls)
+9. [Error reference](#9-error-reference)
 
 ---
 
@@ -286,8 +287,14 @@ stimuli: Vec<f32>     len == snn.num_channels(),  all values in [-1, 1]
 fired_neurons: Vec<usize>
 ```
 
-Steps 4 and 5 are handled by `projector::embed_to_stimuli_with_width`
-(see [`src/projector.rs`](../src/projector.rs)):
+Step 4 is handled by `pool_embedding` in `src/hybrid.rs` to produce the final
+`HybridOutput::embedding`. It mean-pools the hidden-state tensor across the
+sequence dimension (if 2-D) to a vector of length `transformer.dim()`.
+
+Step 5 is handled by `projector::embed_to_stimuli_with_width`
+(see [`src/projector.rs`](../src/projector.rs)) to produce the SNN stimuli via
+these **independent** internal steps (it performs its own mean-pool; it does
+**not** reuse the Step 4 embedding vector):
 
 1. **Mean-pool**: If the tensor is 2-D `[seq, dim]`, average across the
    sequence dimension to get a `[dim]` vector. If 1-D, use as-is.
@@ -296,6 +303,10 @@ Steps 4 and 5 are handled by `projector::embed_to_stimuli_with_width`
    If shorter, it is zero-padded.
 3. **Tanh squash**: Every value is passed through `tanh`, guaranteeing
    the output is in `[-1.0, 1.0]`.
+
+In other words, mean-pooling runs twice on the same hidden tensor — once for
+the `embedding` output and once inside the projector for `stimuli`. Backend
+implementers should not assume a single shared pooled vector feeds both.
 
 The pipeline returns a `HybridOutput`:
 
@@ -570,7 +581,7 @@ it to the caller. Don't panic — `HybridNetwork::forward` expects a
 
 ---
 
-## Error reference
+## 9. Error reference
 
 All errors come from [`src/error.rs`](../src/error.rs):
 
