@@ -14,7 +14,7 @@ Context file for AI coding agents working in this repository.
 - Transformer hidden-state pooling / resizing into bounded SNN stimuli
 - The public `HybridNetwork<T, S>` API and its error boundaries
 - Projector logic (dimensionality reduction from transformer hidden space to SNN input channels)
-- Configuration types (`HybridConfig`, `TransformerConfig`, `HybridOutput`)
+- Configuration and output types (`HybridConfig`, `TransformerConfig`, `HybridOutput`)
 
 ### This crate does NOT own
 
@@ -37,7 +37,7 @@ Three core traits define the pluggable backend surface:
 - **`SpikingNetwork`** — steps the SNN forward given stimuli + neuromodulator state, returns fired neuron indices. Implementations live in `neuromod` / `brainstem-daemon`.
 - **`GgufLoader`** — loads GGUF model layouts from disk. Implementations live in `engram-parser`.
 
-`HybridNetwork<T: Transformer, S: SpikingNetwork>` is generic over these traits. Any code that adds a concrete backend dependency to `Cargo.toml` is a boundary violation.
+`HybridNetwork<T: Transformer, S: SpikingNetwork>` is generic over the `Transformer` and `SpikingNetwork` traits; `GgufLoader` is consumed separately. Any code that adds a concrete backend dependency to `Cargo.toml` is a boundary violation.
 
 ## Sibling Crates
 
@@ -60,4 +60,4 @@ cargo clippy -- -D warnings
 
 ## Org Boundary Matrix
 
-See [LIM-9 boundary matrix](https://github.com/orgs/Limen-Neural/projects) for cross-crate ownership and dependency rules across the Limen-Neural organisation.
+See [LIM-9](https://github.com/Limen-Neural/hybrid-fusion/issues/5) for the full boundary matrix (cross-crate ownership and dependency rules across the Limen-Neural organisation).
