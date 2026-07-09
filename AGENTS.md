@@ -88,5 +88,5 @@ cargo clippy -- -D warnings
 
 ## Org boundary matrix
 
-See [LIM-9 / issue #5](https://github.com/Limen-Neural/hybrid-fusion/issues/5)
+See [Limen issue LIM-9 / issue #5](https://github.com/Limen-Neural/hybrid-fusion/issues/5)
 (Limen-Neural boundary matrix) for cross-crate ownership and dependency rules.
