@@ -10,5 +10,5 @@ pub mod types;
 pub use error::{HybridError, Result};
 pub use hybrid::HybridNetwork;
 pub use tensor::Tensor;
-pub use traits::{GgufLoader, NeuroModulators, SpikingNetwork, Transformer};
+pub use traits::{GgufLayout, GgufLoader, NeuroModulators, SpikingNetwork, Transformer};
 pub use types::{HybridConfig, HybridOutput, TransformerConfig};
