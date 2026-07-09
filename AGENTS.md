@@ -16,13 +16,13 @@ Typical local tools for this repo:
 
 | Tool | Purpose |
 |------|---------|
-| `cargo build` / `cargo test` | Compile and run unit tests |
+| `cargo build` / `cargo test --all-features` | Compile and run unit tests |
 | `cargo clippy -- -D warnings` | Lint at CI severity |
 | `cargo fmt` | Format Rust sources |
 | `gh` | GitHub PR / CI inspection (optional) |
 | Editor / language server | Navigate `src/traits.rs` and sibling crates |
 
-Prefer `cargo test --all-features` before pushing CI-sensitive changes.
+Run `cargo test --all-features` before pushing CI-sensitive changes.
 
 ## Crate purpose
 
