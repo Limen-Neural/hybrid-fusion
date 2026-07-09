@@ -427,7 +427,13 @@ impl MySnn {
 
 impl SpikingNetwork for MySnn {
     fn step(&mut self, stimuli: &[f32], modulators: &NeuroModulators) -> Result<Vec<usize>> {
-        assert_eq!(stimuli.len(), self.num_channels);
+        if stimuli.len() != self.num_channels {
+            return Err(HybridError::SnnStep(format!(
+                "stimuli length {} != num_channels {}",
+                stimuli.len(),
+                self.num_channels
+            )));
+        }
         let mut fired = Vec::new();
 
         for (i, &input) in stimuli.iter().enumerate() {
@@ -552,8 +558,8 @@ If `token_ids.len() > max_seq_len()`, the pipeline returns
 
 The projector always produces `snn.num_channels()` values. If your `step`
 implementation expects a different length, you'll get a length mismatch
-or silent data corruption. The example above uses `assert_eq!` to catch
-this early.
+or silent data corruption. The example above returns
+`Err(HybridError::SnnStep(...))` so callers can recover instead of panicking.
 
 ### Stimuli are always in [-1, 1]
 
