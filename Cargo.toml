@@ -37,10 +37,6 @@ proptest   = "1"
 name = "sentry_init"
 required-features = ["sentry"]
 
-[[example]]
-name = "sentry_init"
-required-features = ["sentry"]
-
 [profile.release]
 opt-level     = 3
 lto           = true
