@@ -9,7 +9,7 @@
 //! 3. If potential exceeds `threshold`, record the neuron as fired and reset
 //!    its potential.
 
-use crate::error::Result;
+use crate::error::{HybridError, Result};
 use crate::traits::{NeuroModulators, SpikingNetwork};
 
 /// Leaky Integrate-and-Fire spiking network.
@@ -45,9 +45,15 @@ impl SimpleSnn {
 
 impl SpikingNetwork for SimpleSnn {
     fn step(&mut self, stimuli: &[f32], modulators: &NeuroModulators) -> Result<Vec<usize>> {
-        // Apply leak to every channel; only channels with a corresponding
-        // stimulus receive new input (short stimuli never leave stale membrane
-        // state without decay).
+        // Reject mismatched widths before mutating membrane state so malformed
+        // backend calls cannot silently drop or ignore channels.
+        if stimuli.len() != self.num_channels {
+            return Err(HybridError::InputLengthMismatch {
+                expected: self.num_channels,
+                got: stimuli.len(),
+            });
+        }
+
         let mut fired = Vec::new();
 
         let dopamine_gain = 1.0 + modulators.dopamine * 0.5 + modulators.aux_dopamine * 0.25;
@@ -61,10 +67,8 @@ impl SpikingNetwork for SimpleSnn {
             // 1. Leak toward zero.
             *pot *= 1.0 - effective_leak;
 
-            // 2. Add stimulus with modulator scaling (only where provided).
-            if let Some(&stim) = stimuli.get(i) {
-                *pot += stim * dopamine_gain * cortisol_suppress;
-            }
+            // 2. Add stimulus with modulator scaling (width already validated).
+            *pot += stimuli[i] * dopamine_gain * cortisol_suppress;
 
             // 3. Spike if above threshold.
             if *pot >= self.threshold {
@@ -164,5 +168,28 @@ mod tests {
         let fired = snn.step(&[0.3], &neutral).unwrap();
         // 0.4 + 0.4 + 0.3 = 1.1 >= 1.0
         assert_eq!(fired, vec![0usize]);
+    }
+
+    #[test]
+    fn rejects_stimuli_width_mismatch() {
+        let mut snn = SimpleSnn::new(4);
+        let mods = NeuroModulators::default();
+        let err = snn.step(&[0.1, 0.2], &mods).unwrap_err();
+        match err {
+            HybridError::InputLengthMismatch { expected, got } => {
+                assert_eq!(expected, 4);
+                assert_eq!(got, 2);
+            }
+            other => panic!("expected InputLengthMismatch, got {other:?}"),
+        }
+        // Over-long inputs are also rejected (no silent truncation).
+        let err = snn.step(&[0.0; 5], &mods).unwrap_err();
+        assert!(matches!(
+            err,
+            HybridError::InputLengthMismatch {
+                expected: 4,
+                got: 5
+            }
+        ));
     }
 }

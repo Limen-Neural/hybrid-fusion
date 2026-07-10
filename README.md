@@ -74,6 +74,7 @@ use hybrid_fusion::Result;
 ## Guides
 
 - **[Implementing a Backend](docs/implementing-backends.md)** — trait contracts, data flow, tensor shape conventions, and a minimal working example for `Transformer` + `SpikingNetwork`.
+
 ## Error monitoring (optional)
 
 `hybrid-fusion` ships an optional

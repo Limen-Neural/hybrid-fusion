@@ -28,6 +28,16 @@ impl SimpleTransformer {
     pub fn new(config: TransformerConfig) -> Self {
         let vocab_size = config.vocab_size;
         let dim = config.dim;
+        // Zero-sized configs later panic (modulo-by-zero in embed_token) or
+        // violate Tensor::from_vec's non-zero extent invariant — reject early.
+        assert!(
+            vocab_size > 0,
+            "SimpleTransformer::new: vocab_size must be > 0, got {vocab_size}"
+        );
+        assert!(
+            dim > 0,
+            "SimpleTransformer::new: dim must be > 0, got {dim}"
+        );
 
         let mut lcg = Lcg::new(
             (vocab_size as u64).wrapping_mul(2654435761) ^ (dim as u64).wrapping_mul(2246822519),
@@ -173,5 +183,21 @@ mod tests {
         let hs_wrap = t.hidden_states(&[100]);
         let hs_norm = t.hidden_states(&[4]);
         assert_eq!(hs_wrap.data(), hs_norm.data());
+    }
+
+    #[test]
+    fn rejects_zero_vocab_size() {
+        let mut cfg = tiny_config();
+        cfg.vocab_size = 0;
+        let result = std::panic::catch_unwind(|| SimpleTransformer::new(cfg));
+        assert!(result.is_err(), "vocab_size == 0 must be rejected");
+    }
+
+    #[test]
+    fn rejects_zero_dim() {
+        let mut cfg = tiny_config();
+        cfg.dim = 0;
+        let result = std::panic::catch_unwind(|| SimpleTransformer::new(cfg));
+        assert!(result.is_err(), "dim == 0 must be rejected");
     }
 }
