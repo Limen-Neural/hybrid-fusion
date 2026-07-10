@@ -48,14 +48,28 @@ impl Transformer for MockTransformer {
 
 struct MockSnn {
     channels: usize,
+    /// Last modulators observed by `step` (for custom-modulator propagation).
+    last_modulators: Option<NeuroModulators>,
+}
+
+impl MockSnn {
+    fn new(channels: usize) -> Self {
+        Self {
+            channels,
+            last_modulators: None,
+        }
+    }
 }
 
 impl SpikingNetwork for MockSnn {
     fn step(
         &mut self,
         stimuli: &[f32],
-        _modulators: &NeuroModulators,
+        modulators: &NeuroModulators,
     ) -> hybrid_fusion::Result<Vec<usize>> {
+        // Record received modulators so integration tests can verify forward
+        // actually propagates custom values (not just defaults).
+        self.last_modulators = Some(modulators.clone());
         Ok(stimuli
             .iter()
             .enumerate()
@@ -101,16 +115,28 @@ impl Transformer for MismatchedDimTransformer {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Build a network whose mock SNN channel count is deliberately *different*
+/// from `cfg.snn_input_channels`, so shape assertions exercise
+/// `SpikingNetwork::num_channels()` wiring rather than config defaults.
 fn build_network() -> HybridNetwork<MockTransformer, MockSnn> {
     let cfg = HybridConfig::tiny();
+    // Leave cfg.snn_input_channels at its default; mock uses a different width.
+    let mock_channels = cfg.snn_input_channels.saturating_add(13).max(1);
+    assert_ne!(mock_channels, cfg.snn_input_channels);
     let t = MockTransformer {
         dim: cfg.transformer.dim,
         max_seq: cfg.transformer.max_seq_len,
     };
-    let s = MockSnn {
-        channels: cfg.snn_input_channels,
-    };
+    let s = MockSnn::new(mock_channels);
     HybridNetwork::new(t, s, cfg)
+}
+
+fn modulators_eq(a: &NeuroModulators, b: &NeuroModulators) -> bool {
+    a.dopamine == b.dopamine
+        && a.cortisol == b.cortisol
+        && a.acetylcholine == b.acetylcholine
+        && a.tempo == b.tempo
+        && a.aux_dopamine == b.aux_dopamine
 }
 
 // ---------------------------------------------------------------------------
@@ -119,25 +145,25 @@ fn build_network() -> HybridNetwork<MockTransformer, MockSnn> {
 
 #[test]
 fn test_forward_output_shapes() {
-    let cfg = HybridConfig::tiny();
     let mut net = build_network();
+    let snn_channels = net.snn.num_channels();
+    // Prove the mock width is not the config default (decoupled wiring).
+    assert_ne!(snn_channels, net.config().snn_input_channels);
 
     let out: HybridOutput = net
         .forward(&[1, 2, 3, 4], None)
         .expect("forward should succeed");
 
-    // embedding dimension matches the transformer's hidden dim
-    assert_eq!(out.embedding.len(), cfg.transformer.dim);
+    // embedding dimension matches the transformer's hidden dim (trait contract)
+    assert_eq!(out.embedding.len(), net.transformer.dim());
 
-    // stimuli dimension matches the SNN's channel count
-    assert_eq!(out.stimuli.len(), cfg.snn_input_channels);
+    // stimuli dimension matches the SNN's public channel count, not config
+    assert_eq!(out.stimuli.len(), snn_channels);
+    assert_ne!(out.stimuli.len(), net.config().snn_input_channels);
 
     // fired_neurons is a subset of valid channel indices
     for &idx in &out.fired_neurons {
-        assert!(
-            idx < cfg.snn_input_channels,
-            "fired neuron index out of range"
-        );
+        assert!(idx < snn_channels, "fired neuron index out of range");
     }
 
     // first forward sets global_step to 1
@@ -215,8 +241,6 @@ fn test_stimuli_bounded() {
 #[test]
 fn test_forward_with_custom_modulators() {
     let mut net = build_network();
-    let cfg_dim = net.config().transformer.dim;
-    let cfg_channels = net.config().snn_input_channels;
 
     let custom = NeuroModulators {
         dopamine: 0.8,
@@ -227,13 +251,29 @@ fn test_forward_with_custom_modulators() {
     };
 
     let out = net
-        .forward(&[10, 20, 30], Some(custom))
+        .forward(&[10, 20, 30], Some(custom.clone()))
         .expect("forward with custom modulators should succeed");
 
-    // Prefer public config() over direct field access for shape expectations.
-    assert_eq!(out.embedding.len(), cfg_dim);
-    assert_eq!(out.stimuli.len(), cfg_channels);
+    // Prefer trait contracts / mock observations over config defaults.
+    assert_eq!(out.embedding.len(), net.transformer.dim());
+    assert_eq!(out.stimuli.len(), net.snn.num_channels());
     assert_eq!(out.global_step, 1);
+
+    // Mock must have observed the exact custom modulators (proves forward
+    // propagates Some(custom) rather than always substituting defaults).
+    let observed = net
+        .snn
+        .last_modulators
+        .as_ref()
+        .expect("MockSnn should have recorded modulators");
+    assert!(
+        modulators_eq(observed, &custom),
+        "expected custom modulators to be forwarded, got {observed:?}"
+    );
+    assert!(
+        !modulators_eq(observed, &NeuroModulators::default()),
+        "custom modulators must not equal defaults for this test to be meaningful"
+    );
 
     // stimuli must still be bounded even with non-default modulators
     for v in &out.stimuli {
@@ -241,10 +281,11 @@ fn test_forward_with_custom_modulators() {
     }
 }
 
-/// Zero-dim tensors are always an error (REVIEW.md). Construction panics at
-/// the Tensor boundary before a bad shape can reach HybridNetwork::forward.
+/// Zero-*extent* dimensions (any axis of length 0) are always an error.
+/// Rank-0 tensors (`shape = &[]`) are a separate case: product is 1 and they
+/// represent a scalar, which the public Tensor API accepts (see property tests).
 #[test]
-fn test_tensor_rejects_zero_dimensions() {
+fn test_tensor_rejects_zero_extent_dimensions() {
     let cases: &[&[usize]] = &[&[0], &[1, 0], &[0, 4], &[2, 0, 3]];
     for shape in cases {
         let result = std::panic::catch_unwind(|| {
@@ -253,7 +294,7 @@ fn test_tensor_rejects_zero_dimensions() {
         });
         assert!(
             result.is_err(),
-            "Tensor::from_vec should reject zero-dim shape {shape:?}"
+            "Tensor::from_vec should reject zero-extent shape {shape:?}"
         );
 
         let result = std::panic::catch_unwind(|| {
@@ -261,9 +302,23 @@ fn test_tensor_rejects_zero_dimensions() {
         });
         assert!(
             result.is_err(),
-            "Tensor::zeros should reject zero-dim shape {shape:?}"
+            "Tensor::zeros should reject zero-extent shape {shape:?}"
         );
     }
+}
+
+/// Rank-0 (`shape = &[]`) is accepted as a scalar tensor (numel == 1).
+#[test]
+fn test_tensor_accepts_rank0_scalar() {
+    let t = Tensor::from_vec(vec![3.5], &[]);
+    assert_eq!(t.ndim(), 0);
+    assert_eq!(t.numel(), 1);
+    assert_eq!(t.data(), &[3.5]);
+
+    let z = Tensor::zeros(&[]);
+    assert_eq!(z.ndim(), 0);
+    assert_eq!(z.numel(), 1);
+    assert_eq!(z.data(), &[0.0]);
 }
 
 /// Hidden-state width that disagrees with Transformer::dim() is rejected via
@@ -276,21 +331,15 @@ fn test_forward_rejects_hidden_dim_mismatch() {
         actual_dim: cfg.transformer.dim + 8,
         max_seq: cfg.transformer.max_seq_len,
     };
-    let s = MockSnn {
-        channels: cfg.snn_input_channels,
-    };
+    let s = MockSnn::new(cfg.snn_input_channels);
     let mut net = HybridNetwork::new(t, s, cfg);
 
     let err = net
         .forward(&[1, 2, 3], None)
         .expect_err("mismatched hidden dim should fail");
+    // Assert the public error variant only — do not pin free-form message text.
     match err {
-        HybridError::InvalidConfig(msg) => {
-            assert!(
-                msg.contains("does not match"),
-                "unexpected InvalidConfig message: {msg}"
-            );
-        }
+        HybridError::InvalidConfig(_) => {}
         other => panic!("expected InvalidConfig, got {other:?}"),
     }
 }
