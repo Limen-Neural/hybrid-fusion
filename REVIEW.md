@@ -6,7 +6,7 @@ Code review guidelines for hybrid-fusion.
 
 The core data flow is:
 
-```
+```text
 token_ids -> Transformer::hidden_states -> projector -> tanh -> SpikingNetwork::step -> fired_neurons
 ```
 
