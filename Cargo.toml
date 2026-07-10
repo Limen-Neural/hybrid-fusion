@@ -23,11 +23,14 @@ serde_json = "1.0"
 thiserror  = "1.0"
 
 # ── Optional: Sentry error reporting ──────────────────────────────────────────
-sentry = { version = "0.34", optional = true, default-features = false, features = ["backtrace", "contexts", "panic", "rustls"] }
+# Enabling `sentry` pulls a sizable transitive tree (reqwest/hyper/tokio/ring).
+# Prefer it only in service binaries; library default builds stay lean.
+sentry = { version = "0.34", optional = true, default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
 
 [features]
 default  = []
 sentry   = ["dep:sentry"]
+backends = []
 
 [dev-dependencies]
 serde_json = "1.0"
@@ -36,6 +39,13 @@ proptest   = "1"
 [[example]]
 name = "sentry_init"
 required-features = ["sentry"]
+
+[[example]]
+name = "simple_hybrid"
+required-features = ["backends"]
+
+[[example]]
+name = "hybrid_telemetry"
 
 [profile.release]
 opt-level     = 3

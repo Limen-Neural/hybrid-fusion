@@ -2,6 +2,7 @@
 
 use crate::error::{HybridError, Result};
 use crate::projector;
+use crate::telemetry;
 use crate::tensor::Tensor;
 use crate::traits::{NeuroModulators, SpikingNetwork, Transformer};
 use crate::types::{HybridConfig, HybridOutput};
@@ -28,6 +29,8 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         token_ids: &[u32],
         modulators: Option<NeuroModulators>,
     ) -> Result<HybridOutput> {
+        // Caller-side validation errors are returned without Sentry capture so
+        // routine bad requests do not flood the error stream / quota.
         if token_ids.is_empty() {
             return Err(HybridError::InputLengthMismatch {
                 expected: 1,
@@ -54,7 +57,14 @@ impl<T: Transformer, S: SpikingNetwork> HybridNetwork<T, S> {
         let stimuli = projector::embed_to_stimuli_with_width(&hidden, snn_width);
 
         let modulators = modulators.unwrap_or_default();
-        let fired_neurons = self.snn.step(&stimuli, &modulators)?;
+        // Backend/runtime failures are reported when the `sentry` feature is on.
+        let fired_neurons = match self.snn.step(&stimuli, &modulators) {
+            Ok(fired) => fired,
+            Err(err) => {
+                telemetry::capture_error(&err);
+                return Err(err);
+            }
+        };
 
         self.global_step = self.global_step.saturating_add(1);
 
