@@ -27,7 +27,7 @@ Copy-paste this into every PR review:
 ### Invariants
 
 - [ ] Stimuli values are always in `[-1, 1]` (enforced by `tanh` in projector)
-- [ ] Tensor dimensions are always > 0 (reject zero-dim tensors)
+- [ ] Tensor dimension extents are always > 0 (reject any axis of length 0; rank-0 scalars are allowed)
 - [ ] `token_ids` is never empty (validated in `HybridNetwork::forward`)
 - [ ] `token_ids.len()` never exceeds `transformer.max_seq_len()`
 - [ ] No silent fallback on shape mismatches — return an error
@@ -78,9 +78,9 @@ Do not suggest downgrading to edition 2021. This project uses edition 2024.
 
 The projector applies `tanh` to guarantee stimuli are in `[-1, 1]`. If you see code that bypasses the projector to feed raw values into `SpikingNetwork::step`, flag it.
 
-### Zero-dim tensors are a bug
+### Zero-extent tensor axes are a bug
 
-If a code path produces a zero-dimensional tensor, that is always an error — never silently propagate it.
+If a code path produces a tensor with any axis of length 0, that is always an error — never silently propagate it. Rank-0 (scalar) tensors with `shape = []` and one element are allowed.
 
 ## AI reviewer notes
 
@@ -104,7 +104,7 @@ If a code path produces a zero-dimensional tensor, that is always an error — n
 Run locally before pushing:
 
 ```bash
-cargo check                 # compile check
-cargo test --all-features   # all unit + doc tests
-cargo clippy -- -D warnings # lint, deny all warnings
+cargo check                                  # compile check
+cargo test --all-features                    # all unit + doc tests
+cargo clippy --all-targets --all-features -- -D warnings  # match CI
 ```
